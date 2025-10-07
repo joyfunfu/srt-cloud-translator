@@ -12,6 +12,8 @@ export default async function handler(req, res) {
             if (job) {
                 delete job.chunks; 
                 delete job.translatedChunks;
+                delete job.originalContent;
+                delete job.translatedContent;
             }
             return job;
         });

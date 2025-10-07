@@ -1,4 +1,3 @@
-import { put } from '@vercel/blob';
 import { kv } from '@vercel/kv';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
@@ -21,20 +20,22 @@ export default async function handler(req, res) {
             const originalFilename = file.originalname;
             
             const fileContent = file.buffer.toString('utf-8');
+            // KV has a 1MB limit per value. We check against 950KB to be safe.
+            if (fileContent.length > 950 * 1024) {
+                console.warn(`Skipping file ${originalFilename} because it is too large.`);
+                continue; 
+            }
             const allSrtBlocks = parseSrt(fileContent);
             if (allSrtBlocks.length === 0) continue;
             
             const chunks = smartChunkSrtBlocks(allSrtBlocks, 30);
             
-            const newFilename = `${jobId}-${originalFilename}`;
-            const blob = await put(newFilename, file.buffer, { access: 'public', addRandomSuffix: false });
-            
             const job = {
                 jobId,
                 filename: originalFilename,
                 status: 'pending',
-                blobUrl: blob.url,
-                downloadUrl: null,
+                originalContent: fileContent,
+                translatedContent: null,
                 createdAt: new Date().toISOString(),
                 chunks,
                 chunksTotal: chunks.length,

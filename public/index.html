@@ -8,24 +8,25 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f9; margin: 2rem; color: #333; }
         .container { max-width: 800px; margin: auto; background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h1, h2 { color: #0056b3; text-align: center; }
+        p { text-align: center; color: #555; }
         .form-group { margin-bottom: 1.5rem; }
         label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
         input[type="file"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         .btn { display: block; width: 100%; padding: 12px; background-color: #28a745; color: white; border: none; font-size: 1.1rem; cursor: pointer; transition: background-color 0.3s; border-radius: 4px; }
+        .btn-download { background-color: #007bff; }
+        .btn-download:hover { background-color: #0056b3; }
         .btn:disabled { background-color: #9e9e9e; cursor: not-allowed; }
         #task-list { margin-top: 2rem; list-style-type: none; padding: 0; }
         #task-list li { background-color: #e9ecef; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
         .task-info { flex-grow: 1; }
         .task-name { font-weight: bold; }
         .task-status { font-style: italic; color: #555; font-size: 0.9em; }
-        .task-download a { text-decoration: none; background-color: #007bff; color: white; padding: 8px 12px; border-radius: 4px; transition: background-color 0.3s; }
-        .task-download a:hover { background-color: #0056b3; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>云端SRT智能翻译平台</h1>
-        <p style="text-align: center;">文件上传后即可关闭网页，任务将在云端自动接力完成。下载后，云端文件将自动销毁。</p>
+        <p>文件内容将加密存储在数据库中，下载时生成临时链接并销毁所有记录。</p>
         <div class="form-group">
             <label for="srt-files">选择 SRT 字幕文件 (可多选)</label>
             <input type="file" id="srt-files" accept=".srt" multiple>
@@ -49,21 +50,19 @@
             const li = document.createElement('li');
             li.id = `job-${job.jobId}`;
             let statusText = job.status;
-            const chunksTotal = job.chunksTotal || 0;
-            const chunksCompleted = job.chunksCompleted || 0;
             if (job.status === 'processing') {
-                const progress = chunksTotal > 0 ? Math.round((chunksCompleted / chunksTotal) * 100) : 0;
+                const progress = job.chunksTotal > 0 ? Math.round((job.chunksCompleted / job.chunksTotal) * 100) : 0;
                 statusText = `处理中... (${progress}%)`;
             } else if (job.status === 'pending') { statusText = '已提交，等待启动...';
             } else if (job.status === 'completed') { statusText = '已完成，等待下载';
             } else if (job.status === 'failed') { statusText = `失败: ${job.error || '未知错误'}`; }
-            const downloadButton = job.downloadUrl ? `<a href="${job.downloadUrl}" data-job-id="${job.jobId}" target="_blank" download>下载并销毁</a>` : '';
+            const downloadButton = job.status === 'completed' ? `<button class="btn btn-download" data-job-id="${job.jobId}">下载并销毁</button>` : '';
             li.innerHTML = `
                 <div class="task-info">
                     <div class="task-name">${job.filename}</div>
                     <div class="task-status">${statusText}</div>
                 </div>
-                <div class="task-download">${downloadButton}</div>
+                ${downloadButton}
             `;
             taskList.appendChild(li);
         }
@@ -120,29 +119,36 @@
         clearInterval(jobPollingInterval);
         jobPollingInterval = null;
     }
-    taskList.addEventListener('click', function(event) {
-        if (event.target && event.target.matches('a[data-job-id]')) {
-            const jobId = event.target.dataset.jobId;
-            console.log(`Download clicked for job: ${jobId}. Initiating cleanup.`);
-            const listItem = document.getElementById(`job-${jobId}`);
-            if (listItem) {
-                const statusElement = listItem.querySelector('.task-status');
-                if (statusElement) statusElement.textContent = '已下载，正在销毁...';
-            }
-            setTimeout(() => {
-                fetch('/api/4-cleanup-job', {
+    taskList.addEventListener('click', async function(event) {
+        if (event.target && event.target.matches('button.btn-download')) {
+            const button = event.target;
+            const jobId = button.dataset.jobId;
+            button.disabled = true;
+            button.textContent = '生成中...';
+            try {
+                const response = await fetch('/api/4-create-download-link', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ jobId }),
-                })
-                .then(() => {
-                    console.log(`Cleanup request sent for job: ${jobId}.`);
-                    const jobs = loadJobs();
-                    delete jobs[jobId];
-                    saveJobs(jobs);
-                    displayJobs();
                 });
-            }, 1000);
+                if (!response.ok) { throw new Error('无法生成下载链接'); }
+                const { url, filename } = await response.json();
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                const jobs = loadJobs();
+                delete jobs[jobId];
+                saveJobs(jobs);
+                displayJobs();
+            } catch (error) {
+                console.error('下载失败:', error);
+                alert('生成下载链接失败！');
+                button.disabled = false;
+                button.textContent = '下载并销毁';
+            }
         }
     });
     document.addEventListener('DOMContentLoaded', displayJobs);
