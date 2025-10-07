@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import ZhipuAI from "zhipuai";
-import { parseAiTranslationOutput, forceMergeChunk } from '../../utils/srtParser.js';
+import { parseAiTranslationOutput, forceMergeChunk } from './utils/srtParser.js';
 
 const TRANSLATION_PROMPT = `You are an expert subtitle translator...`; // full prompt text
 const RETRY_PROMPT_TEMPLATE = (originalText, errorMessage) => `You are an expert subtitle translator...`; // full prompt text

@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
-import { smartChunkSrtBlocks, parseSrt } from '../../utils/srtParser.js';
+import { smartChunkSrtBlocks, parseSrt } from './utils/srtParser.js';
 
 export const config = { api: { bodyParser: false } };
 const upload = multer({ storage: multer.memoryStorage() });
