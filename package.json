@@ -1,0 +1,19 @@
+{
+  "name": "srt-cloud-translator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@vercel/blob": "^2.0.0",
+    "@vercel/kv": "^3.0.0",
+    "multer": "^2.0.2",
+    "uuid": "^13.0.0",
+    "zhipuai": "^2.0.0"
+  }
+}

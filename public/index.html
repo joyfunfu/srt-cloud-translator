@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>云端SRT智能翻译平台 v4.2</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f9; margin: 2rem; color: #333; }
+        .container { max-width: 800px; margin: auto; background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1, h2 { color: #0056b3; text-align: center; }
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; font-weight: 600; margin-bottom: 0.5rem; }
+        input[type="file"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .btn { display: block; width: 100%; padding: 12px; background-color: #28a745; color: white; border: none; font-size: 1.1rem; cursor: pointer; transition: background-color 0.3s; border-radius: 4px; }
+        .btn:disabled { background-color: #9e9e9e; cursor: not-allowed; }
+        #task-list { margin-top: 2rem; list-style-type: none; padding: 0; }
+        #task-list li { background-color: #e9ecef; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        .task-info { flex-grow: 1; }
+        .task-name { font-weight: bold; }
+        .task-status { font-style: italic; color: #555; font-size: 0.9em; }
+        .task-download a { text-decoration: none; background-color: #007bff; color: white; padding: 8px 12px; border-radius: 4px; transition: background-color 0.3s; }
+        .task-download a:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>云端SRT智能翻译平台</h1>
+        <p style="text-align: center;">文件上传后将在云端自动处理，您可以随时关闭页面，稍后回来查看结果。</p>
+
+        <div class="form-group">
+            <label for="srt-files">选择 SRT 字幕文件 (可多选)</label>
+            <input type="file" id="srt-files" accept=".srt" multiple>
+        </div>
+        <button id="upload-btn" class="btn">上传并开始翻译</button>
+
+        <h2>任务列表</h2>
+        <ul id="task-list"></ul>
+    </div>
+
+<script>
+    const uploadBtn = document.getElementById('upload-btn');
+    const fileInput = document.getElementById('srt-files');
+    const taskList = document.getElementById('task-list');
+    let jobPollingInterval;
+
+    function saveJobs(jobs) { localStorage.setItem('srtJobs', JSON.stringify(jobs)); }
+    function loadJobs() { return JSON.parse(localStorage.getItem('srtJobs') || '{}'); }
+
+    function displayJobs() {
+        const jobs = loadJobs();
+        taskList.innerHTML = '';
+        const sortedJobs = Object.values(jobs).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        
+        for (const job of sortedJobs) {
+            const li = document.createElement('li');
+            li.id = `job-${job.jobId}`;
+            
+            let statusText = job.status;
+            if (job.status === 'processing' && job.chunksTotal > 0) {
+                const progress = job.chunksTotal > 0 ? Math.round((job.chunksCompleted / job.chunksTotal) * 100) : 0;
+                statusText = `处理中... (${progress}%)`;
+            } else if (job.status === 'pending') { statusText = '等待处理...';
+            } else if (job.status === 'completed') { statusText = '已完成';
+            } else if (job.status === 'failed') { statusText = `失败: ${job.error || '未知错误'}`; }
+
+            const downloadButton = job.downloadUrl ? `<a href="${job.downloadUrl}" target="_blank" download>下载</a>` : '';
+
+            li.innerHTML = `
+                <div class="task-info">
+                    <div class="task-name">${job.filename}</div>
+                    <div class="task-status">${statusText}</div>
+                </div>
+                <div class="task-download">${downloadButton}</div>
+            `;
+            taskList.appendChild(li);
+        }
+
+        const hasActiveJobs = Object.values(jobs).some(j => j.status === 'processing' || j.status === 'pending');
+        if (hasActiveJobs) { startJobPolling(); } else { stopJobPolling(); }
+    }
+
+    uploadBtn.addEventListener('click', async () => {
+        if (fileInput.files.length === 0) { alert('请选择至少一个文件！'); return; }
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = '正在上传...';
+
+        const formData = new FormData();
+        for (const file of fileInput.files) { formData.append('srtFiles', file); }
+
+        try {
+            const response = await fetch('/api/1-start-translation', { method: 'POST', body: formData });
+            if (!response.ok) { const err = await response.json(); throw new Error(err.error || '上传失败'); }
+            const newJobs = await response.json();
+            const jobs = loadJobs();
+            for (const job of newJobs) { jobs[job.jobId] = job; }
+            saveJobs(jobs);
+            displayJobs();
+        } catch (error) {
+            console.error('上传失败:', error);
+            alert(`上传失败: ${error.message}`);
+        } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = '上传并开始翻译';
+            fileInput.value = '';
+        }
+    });
+
+    async function pollJobStatuses() {
+        const jobs = loadJobs();
+        const jobIds = Object.keys(jobs).filter(id => jobs[id].status === 'processing' || jobs[id].status === 'pending');
+        if (jobIds.length === 0) { stopJobPolling(); return; }
+
+        console.log('正在轮询任务状态:', jobIds.join(', '));
+        try {
+            const response = await fetch(`/api/3-job-status?jobIds=${jobIds.join(',')}`);
+            const updatedJobs = await response.json();
+            let somethingChanged = false;
+            for (const job of updatedJobs) {
+                if (JSON.stringify(jobs[job.jobId]) !== JSON.stringify(job)) { somethingChanged = true; }
+                jobs[job.jobId] = job;
+            }
+            if (somethingChanged) { saveJobs(jobs); displayJobs(); }
+        } catch (error) { console.error("轮询失败:", error); }
+    }
+    
+    function startJobPolling() {
+        if (jobPollingInterval) return;
+        jobPollingInterval = setInterval(pollJobStatuses, 5000);
+    }
+
+    function stopJobPolling() {
+        if (!jobPollingInterval) return;
+        console.log("所有活动任务完成，停止轮询。");
+        clearInterval(jobPollingInterval);
+        jobPollingInterval = null;
+    }
+
+    document.addEventListener('DOMContentLoaded', displayJobs);
+</script>
+</body>
+</html>
