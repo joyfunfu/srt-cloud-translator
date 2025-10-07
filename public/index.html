@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>云端SRT智能翻译平台 v4.2</title>
+    <title>云端SRT智能翻译平台 (最终版)</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f9; margin: 2rem; color: #333; }
         .container { max-width: 800px; margin: auto; background-color: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
@@ -25,46 +25,39 @@
 <body>
     <div class="container">
         <h1>云端SRT智能翻译平台</h1>
-        <p style="text-align: center;">文件上传后将在云端自动处理，您可以随时关闭页面，稍后回来查看结果。</p>
-
+        <p style="text-align: center;">文件上传后即可关闭网页，任务将在云端自动接力完成。下载后，云端文件将自动销毁。</p>
         <div class="form-group">
             <label for="srt-files">选择 SRT 字幕文件 (可多选)</label>
             <input type="file" id="srt-files" accept=".srt" multiple>
         </div>
         <button id="upload-btn" class="btn">上传并开始翻译</button>
-
         <h2>任务列表</h2>
         <ul id="task-list"></ul>
     </div>
-
 <script>
     const uploadBtn = document.getElementById('upload-btn');
     const fileInput = document.getElementById('srt-files');
     const taskList = document.getElementById('task-list');
     let jobPollingInterval;
-
     function saveJobs(jobs) { localStorage.setItem('srtJobs', JSON.stringify(jobs)); }
     function loadJobs() { return JSON.parse(localStorage.getItem('srtJobs') || '{}'); }
-
     function displayJobs() {
         const jobs = loadJobs();
         taskList.innerHTML = '';
         const sortedJobs = Object.values(jobs).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        
         for (const job of sortedJobs) {
             const li = document.createElement('li');
             li.id = `job-${job.jobId}`;
-            
             let statusText = job.status;
-            if (job.status === 'processing' && job.chunksTotal > 0) {
-                const progress = job.chunksTotal > 0 ? Math.round((job.chunksCompleted / job.chunksTotal) * 100) : 0;
+            const chunksTotal = job.chunksTotal || 0;
+            const chunksCompleted = job.chunksCompleted || 0;
+            if (job.status === 'processing') {
+                const progress = chunksTotal > 0 ? Math.round((chunksCompleted / chunksTotal) * 100) : 0;
                 statusText = `处理中... (${progress}%)`;
-            } else if (job.status === 'pending') { statusText = '等待处理...';
-            } else if (job.status === 'completed') { statusText = '已完成';
+            } else if (job.status === 'pending') { statusText = '已提交，等待启动...';
+            } else if (job.status === 'completed') { statusText = '已完成，等待下载';
             } else if (job.status === 'failed') { statusText = `失败: ${job.error || '未知错误'}`; }
-
-            const downloadButton = job.downloadUrl ? `<a href="${job.downloadUrl}" target="_blank" download>下载</a>` : '';
-
+            const downloadButton = job.downloadUrl ? `<a href="${job.downloadUrl}" data-job-id="${job.jobId}" target="_blank" download>下载并销毁</a>` : '';
             li.innerHTML = `
                 <div class="task-info">
                     <div class="task-name">${job.filename}</div>
@@ -74,19 +67,15 @@
             `;
             taskList.appendChild(li);
         }
-
         const hasActiveJobs = Object.values(jobs).some(j => j.status === 'processing' || j.status === 'pending');
         if (hasActiveJobs) { startJobPolling(); } else { stopJobPolling(); }
     }
-
     uploadBtn.addEventListener('click', async () => {
         if (fileInput.files.length === 0) { alert('请选择至少一个文件！'); return; }
         uploadBtn.disabled = true;
         uploadBtn.textContent = '正在上传...';
-
         const formData = new FormData();
         for (const file of fileInput.files) { formData.append('srtFiles', file); }
-
         try {
             const response = await fetch('/api/1-start-translation', { method: 'POST', body: formData });
             if (!response.ok) { const err = await response.json(); throw new Error(err.error || '上传失败'); }
@@ -104,12 +93,10 @@
             fileInput.value = '';
         }
     });
-
     async function pollJobStatuses() {
         const jobs = loadJobs();
         const jobIds = Object.keys(jobs).filter(id => jobs[id].status === 'processing' || jobs[id].status === 'pending');
         if (jobIds.length === 0) { stopJobPolling(); return; }
-
         console.log('正在轮询任务状态:', jobIds.join(', '));
         try {
             const response = await fetch(`/api/3-job-status?jobIds=${jobIds.join(',')}`);
@@ -122,19 +109,42 @@
             if (somethingChanged) { saveJobs(jobs); displayJobs(); }
         } catch (error) { console.error("轮询失败:", error); }
     }
-    
     function startJobPolling() {
         if (jobPollingInterval) return;
+        pollJobStatuses();
         jobPollingInterval = setInterval(pollJobStatuses, 5000);
     }
-
     function stopJobPolling() {
         if (!jobPollingInterval) return;
         console.log("所有活动任务完成，停止轮询。");
         clearInterval(jobPollingInterval);
         jobPollingInterval = null;
     }
-
+    taskList.addEventListener('click', function(event) {
+        if (event.target && event.target.matches('a[data-job-id]')) {
+            const jobId = event.target.dataset.jobId;
+            console.log(`Download clicked for job: ${jobId}. Initiating cleanup.`);
+            const listItem = document.getElementById(`job-${jobId}`);
+            if (listItem) {
+                const statusElement = listItem.querySelector('.task-status');
+                if (statusElement) statusElement.textContent = '已下载，正在销毁...';
+            }
+            setTimeout(() => {
+                fetch('/api/4-cleanup-job', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jobId }),
+                })
+                .then(() => {
+                    console.log(`Cleanup request sent for job: ${jobId}.`);
+                    const jobs = loadJobs();
+                    delete jobs[jobId];
+                    saveJobs(jobs);
+                    displayJobs();
+                });
+            }, 1000);
+        }
+    });
     document.addEventListener('DOMContentLoaded', displayJobs);
 </script>
 </body>
