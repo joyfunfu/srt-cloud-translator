@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
-import { smartChunkSrtBlocks, parseSrt } from './utils/srtParser.js';
+import { smartChunkSrtBlocks, parseSrt } from '../../utils/srtParser.js';
 
 export const config = { api: { bodyParser: false } };
 const upload = multer({ storage: multer.memoryStorage() });
@@ -20,7 +20,6 @@ export default async function handler(req, res) {
             const originalFilename = file.originalname;
             
             const fileContent = file.buffer.toString('utf-8');
-            // KV has a 1MB limit per value. We check against 950KB to be safe.
             if (fileContent.length > 950 * 1024) {
                 console.warn(`Skipping file ${originalFilename} because it is too large.`);
                 continue; 
@@ -47,17 +46,27 @@ export default async function handler(req, res) {
             await kv.set(`job:${jobId}`, job);
             newJobs.push(job);
 
-            const protocol = process.env.VERCEL_ENV === 'development' ? 'http' : 'https';
-            const host = process.env.VERCEL_URL || 'localhost:3000';
+            // --- *** KEY CHANGE IS HERE *** ---
+            // We now use our new, reliable environment variable.
+            const siteUrl = process.env.PUBLIC_SITE_URL;
+            const triggerUrl = `${siteUrl}/api/2-process-chunk`;
 
-            fetch(`${protocol}://${host}/api/2-process-chunk`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${process.env.INTERNAL_SECRET}` 
-                },
-                body: JSON.stringify({ jobId }),
-            });
+            console.log(`[Job ${jobId}] Created. Triggering first chunk at: ${triggerUrl}`);
+
+            // We added a try/catch to log any immediate errors from the fetch call.
+            try {
+                fetch(triggerUrl, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${process.env.INTERNAL_SECRET}` 
+                    },
+                    body: JSON.stringify({ jobId }),
+                });
+                console.log(`[Job ${jobId}] Trigger fetch request sent successfully.`);
+            } catch (fetchError) {
+                console.error(`[Job ${jobId}] Failed to send trigger fetch request:`, fetchError);
+            }
         }
         res.status(202).json(newJobs);
     } catch (error) {
